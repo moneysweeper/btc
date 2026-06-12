@@ -95,6 +95,7 @@ const maSettings = {
   50: { color: "#a78bfa", style: "solid", width: 3 },
   200: { color: "#e5e7eb", style: "solid", width: 1 },
 };
+const maSettingsStorageKey = "cryptoChartMaSettings";
 
 function setStatus(text) {
   els.status.textContent = text;
@@ -177,6 +178,43 @@ function updateMaLegend() {
       : "";
     swatch.style.backgroundSize = setting.style === "dotted" ? "6px 3px" : "";
     swatch.style.backgroundColor = setting.style === "dotted" ? "transparent" : setting.color;
+  });
+}
+
+function saveMaSettings() {
+  localStorage.setItem(maSettingsStorageKey, JSON.stringify(maSettings));
+}
+
+function loadMaSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(maSettingsStorageKey));
+    if (!saved || typeof saved !== "object") return;
+
+    Object.entries(saved).forEach(([period, setting]) => {
+      if (!maSettings[period]) return;
+      if (typeof setting.color === "string") maSettings[period].color = setting.color;
+      if (["solid", "dashed", "dotted"].includes(setting.style)) maSettings[period].style = setting.style;
+      if ([1, 2, 3].includes(Number(setting.width))) maSettings[period].width = Number(setting.width);
+    });
+  } catch (error) {
+    console.warn("Saved MA settings could not be loaded.", error);
+  }
+}
+
+function syncMaSettingsControls() {
+  els.maColorInputs.forEach((input) => {
+    const setting = maSettings[input.dataset.maColor];
+    if (setting) input.value = setting.color;
+  });
+
+  els.maStyleSelects.forEach((select) => {
+    const setting = maSettings[select.dataset.maStyle];
+    if (setting) select.value = setting.style;
+  });
+
+  els.maWidthSelects.forEach((select) => {
+    const setting = maSettings[select.dataset.maWidth];
+    if (setting) select.value = String(setting.width);
   });
 }
 
@@ -818,6 +856,7 @@ function bindControls() {
     input.addEventListener("input", () => {
       const period = input.dataset.maColor;
       maSettings[period].color = input.value;
+      saveMaSettings();
       applyMaSettings();
     });
   });
@@ -826,6 +865,7 @@ function bindControls() {
     select.addEventListener("change", () => {
       const period = select.dataset.maStyle;
       maSettings[period].style = select.value;
+      saveMaSettings();
       applyMaSettings();
     });
   });
@@ -834,6 +874,7 @@ function bindControls() {
     select.addEventListener("change", () => {
       const period = select.dataset.maWidth;
       maSettings[period].width = Number(select.value);
+      saveMaSettings();
       applyMaSettings();
     });
   });
@@ -899,6 +940,8 @@ function bindControls() {
 }
 
 async function init() {
+  loadMaSettings();
+  syncMaSettingsControls();
   resetMarketDisplay();
   createCharts();
   bindControls();
