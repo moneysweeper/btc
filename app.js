@@ -1,0 +1,835 @@
+const symbolLabels = {
+  BTCUSDT: "BTC/USDT",
+  ETHUSDT: "ETH/USDT",
+  SOLUSDT: "SOL/USDT",
+  ADAUSDT: "ADA/USDT",
+  "USDT.D": "USDT.D",
+};
+let symbol = "BTCUSDT";
+const candleLimit = 500;
+const defaultVisibleCandleCount = 100;
+let currentInterval = "1m";
+let visibleCandleCount = defaultVisibleCandleCount;
+let candleSocket = null;
+let tickerSocket = null;
+let mainChart = null;
+let rsiChart = null;
+let macdChart = null;
+let candleSeries = null;
+let volumeSeries = null;
+let ma10Series = null;
+let ma20Series = null;
+let ma50Series = null;
+let ma200Series = null;
+let rsiSeries = null;
+let rsiDownSeries = null;
+let rsiSignalSeries = null;
+let rsiOverboughtSeries = null;
+let rsiMidlineSeries = null;
+let rsiOversoldSeries = null;
+let macdSeries = null;
+let macdDownSeries = null;
+let macdSignalSeries = null;
+let macdHistogramSeries = null;
+let candleData = [];
+let volumeData = [];
+let rsiData = [];
+let macdLineData = [];
+let chartsReadyForSync = false;
+let crosshairSyncing = false;
+
+const els = {
+  chart: document.querySelector("#chart"),
+  rsiChart: document.querySelector("#rsiChart"),
+  macdChart: document.querySelector("#macdChart"),
+  lastPrice: document.querySelector("#lastPrice"),
+  priceChange: document.querySelector("#priceChange"),
+  highPrice: document.querySelector("#highPrice"),
+  lowPrice: document.querySelector("#lowPrice"),
+  highLowRange: document.querySelector("#highLowRange"),
+  volume: document.querySelector("#volume"),
+  status: document.querySelector("#status"),
+  marketSymbol: document.querySelector("#marketSymbol"),
+  symbolSelect: document.querySelector("#symbolSelect"),
+  candleCount: document.querySelector("#candleCount"),
+  themeRadios: document.querySelectorAll('input[name="theme"]'),
+  buttons: document.querySelectorAll(".interval"),
+};
+
+const priceFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 2,
+});
+
+const compactFormatter = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 2,
+});
+
+const chartThemes = {
+  dark: {
+    background: "#171b22",
+    text: "#c7d0dd",
+    grid: "#222a35",
+    border: "#2b3441",
+    rsiMidline: "rgba(255, 255, 255, 0.92)",
+    ma200: "rgba(255, 255, 255, 0.72)",
+  },
+  light: {
+    background: "#ffffff",
+    text: "#243244",
+    grid: "#e7ecf3",
+    border: "#d5dce6",
+    rsiMidline: "rgba(17, 24, 39, 0.72)",
+    ma200: "rgba(17, 24, 39, 0.72)",
+  },
+};
+
+function setStatus(text) {
+  els.status.textContent = text;
+}
+
+function formatPrice(value) {
+  return priceFormatter.format(Number(value));
+}
+
+function formatHighLowRange(high, low) {
+  const range = high - low;
+  const percent = low > 0 ? (range / low) * 100 : 0;
+  return `${formatPrice(range)} (${percent.toFixed(2)}%)`;
+}
+
+function resetMarketDisplay() {
+  els.marketSymbol.textContent = symbolLabels[symbol] || symbol;
+  els.lastPrice.textContent = "--";
+  els.priceChange.textContent = "--";
+  els.priceChange.classList.remove("up", "down");
+  els.highPrice.textContent = "--";
+  els.lowPrice.textContent = "--";
+  els.highLowRange.textContent = "--";
+  els.volume.textContent = "--";
+}
+
+function clearChartData() {
+  candleData = [];
+  volumeData = [];
+  rsiData = [];
+  macdLineData = [];
+  candleSeries.setData([]);
+  volumeSeries.setData([]);
+  ma10Series.setData([]);
+  ma20Series.setData([]);
+  ma50Series.setData([]);
+  ma200Series.setData([]);
+  rsiSeries.setData([]);
+  rsiDownSeries.setData([]);
+  rsiSignalSeries.setData([]);
+  rsiOverboughtSeries.setData([]);
+  rsiMidlineSeries.setData([]);
+  rsiOversoldSeries.setData([]);
+  macdSeries.setData([]);
+  macdDownSeries.setData([]);
+  macdSignalSeries.setData([]);
+  macdHistogramSeries.setData([]);
+}
+
+function isBinanceSymbol(value) {
+  return value.endsWith("USDT");
+}
+
+function currentThemeName() {
+  return document.body.dataset.theme === "light" ? "light" : "dark";
+}
+
+function currentChartTheme() {
+  return chartThemes[currentThemeName()];
+}
+
+function chartOptions(container) {
+  const theme = currentChartTheme();
+  return {
+    width: container.clientWidth,
+    height: container.clientHeight,
+    layout: {
+      background: { color: theme.background },
+      textColor: theme.text,
+      fontFamily: getComputedStyle(document.body).fontFamily,
+    },
+    grid: {
+      vertLines: { color: theme.grid },
+      horzLines: { color: theme.grid },
+    },
+    rightPriceScale: {
+      borderColor: theme.border,
+    },
+    timeScale: {
+      borderColor: theme.border,
+      timeVisible: true,
+      secondsVisible: false,
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+    },
+  };
+}
+
+function createCharts() {
+  mainChart = LightweightCharts.createChart(els.chart, chartOptions(els.chart));
+  rsiChart = LightweightCharts.createChart(els.rsiChart, chartOptions(els.rsiChart));
+  macdChart = LightweightCharts.createChart(els.macdChart, chartOptions(els.macdChart));
+
+  candleSeries = mainChart.addCandlestickSeries({
+    upColor: "#22ab94",
+    downColor: "#f7525f",
+    borderUpColor: "#22ab94",
+    borderDownColor: "#f7525f",
+    wickUpColor: "#22ab94",
+    wickDownColor: "#f7525f",
+  });
+
+  volumeSeries = mainChart.addHistogramSeries({
+    color: "#4ea1ff",
+    priceFormat: { type: "volume" },
+    priceScaleId: "",
+  });
+
+  volumeSeries.priceScale().applyOptions({
+    scaleMargins: {
+      top: 0.82,
+      bottom: 0,
+    },
+  });
+
+  ma10Series = mainChart.addLineSeries({
+    color: "#f5a524",
+    lineWidth: 3,
+    priceLineVisible: false,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+  });
+  ma20Series = mainChart.addLineSeries({
+    color: "#4ea1ff",
+    lineWidth: 3,
+    priceLineVisible: false,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+  });
+  ma50Series = mainChart.addLineSeries({
+    color: "#a78bfa",
+    lineWidth: 3,
+    priceLineVisible: false,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+  });
+  ma200Series = mainChart.addLineSeries({
+    color: "rgba(255, 255, 255, 0.72)",
+    lineWidth: 1,
+    priceLineVisible: false,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+  });
+
+  const rsiAutoscaleInfoProvider = () => ({
+    priceRange: {
+      minValue: 0,
+      maxValue: 100,
+    },
+  });
+
+  rsiSeries = rsiChart.addLineSeries({
+    color: "#f5a524",
+    lineWidth: 3,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+    autoscaleInfoProvider: rsiAutoscaleInfoProvider,
+  });
+  rsiDownSeries = rsiChart.addLineSeries({
+    color: "#f7525f",
+    lineWidth: 3,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+    autoscaleInfoProvider: rsiAutoscaleInfoProvider,
+  });
+  rsiSignalSeries = rsiChart.addLineSeries({
+    color: "#4ea1ff",
+    lineWidth: 1,
+    priceLineVisible: false,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+    autoscaleInfoProvider: rsiAutoscaleInfoProvider,
+  });
+  rsiOverboughtSeries = rsiChart.addLineSeries({
+    color: "rgba(247, 82, 95, 0.85)",
+    lineStyle: LightweightCharts.LineStyle.Dotted,
+    lineWidth: 1,
+    priceLineVisible: false,
+    autoscaleInfoProvider: rsiAutoscaleInfoProvider,
+  });
+  rsiMidlineSeries = rsiChart.addLineSeries({
+    color: "rgba(255, 255, 255, 0.92)",
+    lineStyle: LightweightCharts.LineStyle.Dotted,
+    lineWidth: 2,
+    priceLineVisible: false,
+    autoscaleInfoProvider: rsiAutoscaleInfoProvider,
+  });
+  rsiOversoldSeries = rsiChart.addLineSeries({
+    color: "rgba(34, 171, 148, 0.85)",
+    lineStyle: LightweightCharts.LineStyle.Dotted,
+    lineWidth: 1,
+    priceLineVisible: false,
+    autoscaleInfoProvider: rsiAutoscaleInfoProvider,
+  });
+  rsiChart.priceScale("right").applyOptions({
+    scaleMargins: { top: 0.1, bottom: 0.1 },
+  });
+
+  macdHistogramSeries = macdChart.addHistogramSeries({
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+  });
+  macdSeries = macdChart.addLineSeries({
+    color: "#f5a524",
+    lineWidth: 2,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+  });
+  macdDownSeries = macdChart.addLineSeries({
+    color: "#f7525f",
+    lineWidth: 2,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+  });
+  macdSignalSeries = macdChart.addLineSeries({
+    color: "#a78bfa",
+    lineWidth: 1,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+  });
+
+  syncVisibleRanges([mainChart, rsiChart, macdChart]);
+  syncCrosshairs();
+  observeChartSize(els.chart, mainChart);
+  observeChartSize(els.rsiChart, rsiChart);
+  observeChartSize(els.macdChart, macdChart);
+}
+
+function applyChartTheme() {
+  if (!mainChart || !rsiChart || !macdChart) return;
+
+  const theme = currentChartTheme();
+  const options = {
+    layout: {
+      background: { color: theme.background },
+      textColor: theme.text,
+      fontFamily: getComputedStyle(document.body).fontFamily,
+    },
+    grid: {
+      vertLines: { color: theme.grid },
+      horzLines: { color: theme.grid },
+    },
+    rightPriceScale: {
+      borderColor: theme.border,
+    },
+    timeScale: {
+      borderColor: theme.border,
+      timeVisible: true,
+      secondsVisible: false,
+    },
+  };
+
+  [mainChart, rsiChart, macdChart].forEach((chart) => chart.applyOptions(options));
+  rsiMidlineSeries.applyOptions({ color: theme.rsiMidline });
+  ma200Series.applyOptions({ color: theme.ma200 });
+}
+
+function observeChartSize(container, chart) {
+  new ResizeObserver(() => {
+    chart.applyOptions({
+      width: container.clientWidth,
+      height: container.clientHeight,
+    });
+  }).observe(container);
+}
+
+function syncVisibleRanges(charts) {
+  let syncing = false;
+
+  charts.forEach((sourceChart) => {
+    sourceChart.timeScale().subscribeVisibleTimeRangeChange((range) => {
+      if (syncing || !chartsReadyForSync || !range || range.from == null || range.to == null) {
+        return;
+      }
+      syncing = true;
+      charts.forEach((targetChart) => {
+        if (targetChart !== sourceChart) {
+          try {
+            targetChart.timeScale().setVisibleRange(range);
+          } catch (error) {
+            console.warn("Time range sync skipped until chart data is ready.", error);
+          }
+        }
+      });
+      syncing = false;
+    });
+  });
+}
+
+function findValueAtTime(items, time, key = "value") {
+  const found = items.find((item) => item.time === time);
+  return found ? found[key] : undefined;
+}
+
+function clearSyncedCrosshairs(sourceChart, configs) {
+  configs.forEach((config) => {
+    if (config.chart !== sourceChart && typeof config.chart.clearCrosshairPosition === "function") {
+      config.chart.clearCrosshairPosition();
+    }
+  });
+}
+
+function syncCrosshairs() {
+  const configs = [
+    {
+      chart: mainChart,
+      series: candleSeries,
+      valueForTime: (time) => findValueAtTime(candleData, time, "close") ?? candleData.at(-1)?.close ?? 0,
+    },
+    {
+      chart: rsiChart,
+      series: rsiSeries,
+      valueForTime: (time) => findValueAtTime(rsiData, time) ?? 50,
+    },
+    {
+      chart: macdChart,
+      series: macdSeries,
+      valueForTime: (time) => findValueAtTime(macdLineData, time) ?? 0,
+    },
+  ];
+
+  configs.forEach((source) => {
+    source.chart.subscribeCrosshairMove((param) => {
+      if (crosshairSyncing) return;
+
+      crosshairSyncing = true;
+      if (!param?.time || !param?.point) {
+        clearSyncedCrosshairs(source.chart, configs);
+        crosshairSyncing = false;
+        return;
+      }
+
+      configs.forEach((target) => {
+        if (target.chart === source.chart) return;
+
+        target.chart.setCrosshairPosition(target.valueForTime(param.time), param.time, target.series);
+      });
+
+      crosshairSyncing = false;
+    });
+  });
+}
+
+function clampVisibleCandleCount(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed)) return defaultVisibleCandleCount;
+  return Math.min(candleLimit, Math.max(20, parsed));
+}
+
+function applyVisibleCandleRange() {
+  if (!candleData.length) return;
+
+  const startIndex = Math.max(0, candleData.length - visibleCandleCount);
+  const visibleRange = {
+    from: candleData[startIndex].time,
+    to: candleData[candleData.length - 1].time,
+  };
+
+  chartsReadyForSync = false;
+  [mainChart, rsiChart, macdChart].forEach((item) => item.timeScale().setVisibleRange(visibleRange));
+  chartsReadyForSync = true;
+}
+
+function toCandle(kline) {
+  return {
+    time: Math.floor(kline[0] / 1000),
+    open: Number(kline[1]),
+    high: Number(kline[2]),
+    low: Number(kline[3]),
+    close: Number(kline[4]),
+  };
+}
+
+function toVolume(kline) {
+  const open = Number(kline[1]);
+  const close = Number(kline[4]);
+  return {
+    time: Math.floor(kline[0] / 1000),
+    value: Number(kline[5]),
+    color: close >= open ? "rgba(34, 171, 148, 0.45)" : "rgba(247, 82, 95, 0.45)",
+  };
+}
+
+function calculateRsi(candles, period = 14) {
+  if (candles.length <= period) return [];
+
+  const result = [];
+  let gains = 0;
+  let losses = 0;
+
+  for (let i = 1; i <= period; i += 1) {
+    const change = candles[i].close - candles[i - 1].close;
+    if (change >= 0) gains += change;
+    else losses -= change;
+  }
+
+  let averageGain = gains / period;
+  let averageLoss = losses / period;
+  result.push({
+    time: candles[period].time,
+    value: averageLoss === 0 ? 100 : 100 - 100 / (1 + averageGain / averageLoss),
+  });
+
+  for (let i = period + 1; i < candles.length; i += 1) {
+    const change = candles[i].close - candles[i - 1].close;
+    const gain = Math.max(change, 0);
+    const loss = Math.max(-change, 0);
+    averageGain = (averageGain * (period - 1) + gain) / period;
+    averageLoss = (averageLoss * (period - 1) + loss) / period;
+    result.push({
+      time: candles[i].time,
+      value: averageLoss === 0 ? 100 : 100 - 100 / (1 + averageGain / averageLoss),
+    });
+  }
+
+  return result;
+}
+
+function calculateSma(candles, period) {
+  if (candles.length < period) return [];
+
+  const result = [];
+  let sum = 0;
+
+  candles.forEach((candle, index) => {
+    sum += candle.close;
+
+    if (index >= period) {
+      sum -= candles[index - period].close;
+    }
+
+    if (index >= period - 1) {
+      result.push({
+        time: candle.time,
+        value: sum / period,
+      });
+    }
+  });
+
+  return result;
+}
+
+function calculateLineSma(values, period) {
+  if (values.length < period) return [];
+
+  const result = [];
+  let sum = 0;
+
+  values.forEach((item, index) => {
+    sum += item.value;
+
+    if (index >= period) {
+      sum -= values[index - period].value;
+    }
+
+    if (index >= period - 1) {
+      result.push({
+        time: item.time,
+        value: sum / period,
+      });
+    }
+  });
+
+  return result;
+}
+
+function colorLineBySignal(lineData, signalData) {
+  const signalByTime = new Map(signalData.map((item) => [item.time, item.value]));
+
+  return lineData.map((item) => {
+    const signal = signalByTime.get(item.time);
+    return {
+      ...item,
+      color: signal == null || item.value >= signal ? "#22ab94" : "#f7525f",
+    };
+  });
+}
+
+function calculateEma(values, period) {
+  const multiplier = 2 / (period + 1);
+  const ema = [];
+  let previous = null;
+
+  values.forEach((item, index) => {
+    if (index === period - 1) {
+      const seed = values.slice(0, period).reduce((sum, value) => sum + value.close, 0) / period;
+      previous = seed;
+      ema.push({ time: item.time, value: seed });
+      return;
+    }
+
+    if (index >= period) {
+      previous = (item.close - previous) * multiplier + previous;
+      ema.push({ time: item.time, value: previous });
+    }
+  });
+
+  return ema;
+}
+
+function calculateMacd(candles, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+  const fastEma = calculateEma(candles, fastPeriod);
+  const slowEma = calculateEma(candles, slowPeriod);
+  const fastByTime = new Map(fastEma.map((item) => [item.time, item.value]));
+  const macd = slowEma
+    .filter((item) => fastByTime.has(item.time))
+    .map((item) => ({
+      time: item.time,
+      close: fastByTime.get(item.time) - item.value,
+    }));
+  const signal = calculateEma(macd, signalPeriod).map((item) => ({
+    time: item.time,
+    value: item.value,
+  }));
+  const signalByTime = new Map(signal.map((item) => [item.time, item.value]));
+  const macdLine = macd.map((item) => ({ time: item.time, value: item.close }));
+  const histogram = macd
+    .filter((item) => signalByTime.has(item.time))
+    .map((item) => {
+      const value = item.close - signalByTime.get(item.time);
+      return {
+        time: item.time,
+        value,
+        color: value >= 0 ? "rgba(34, 171, 148, 0.5)" : "rgba(247, 82, 95, 0.5)",
+      };
+    });
+
+  return { macdLine, signal, histogram };
+}
+
+function updateIndicators() {
+  const rsi = calculateRsi(candleData);
+  const macd = calculateMacd(candleData);
+  const rsiSignal = calculateLineSma(rsi, 9);
+  const coloredRsi = colorLineBySignal(rsi, rsiSignal);
+  const coloredMacd = colorLineBySignal(macd.macdLine, macd.signal);
+  rsiData = rsi;
+  macdLineData = macd.macdLine;
+
+  ma10Series.setData(calculateSma(candleData, 10));
+  ma20Series.setData(calculateSma(candleData, 20));
+  ma50Series.setData(calculateSma(candleData, 50));
+  ma200Series.setData(calculateSma(candleData, 200));
+  rsiSeries.setData(coloredRsi);
+  rsiDownSeries.setData([]);
+  rsiSignalSeries.setData(rsiSignal);
+  rsiOverboughtSeries.setData(candleData.map((item) => ({ time: item.time, value: 70 })));
+  rsiMidlineSeries.setData(candleData.map((item) => ({ time: item.time, value: 50 })));
+  rsiOversoldSeries.setData(candleData.map((item) => ({ time: item.time, value: 30 })));
+  macdSeries.setData(coloredMacd);
+  macdDownSeries.setData([]);
+  macdSignalSeries.setData(macd.signal);
+  macdHistogramSeries.setData(macd.histogram);
+}
+
+async function loadCandles(interval) {
+  if (!isBinanceSymbol(symbol)) {
+    closeCandleSocket();
+    chartsReadyForSync = false;
+    clearChartData();
+    setStatus("USDT.D 차트 미지원");
+    return;
+  }
+
+  setStatus("데이터 로딩");
+  closeCandleSocket();
+  chartsReadyForSync = false;
+
+  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${candleLimit}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error("캔들 데이터를 가져오지 못했습니다.");
+  }
+
+  const klines = await response.json();
+  candleData = klines.map(toCandle);
+  volumeData = klines.map(toVolume);
+  candleSeries.setData(candleData);
+  volumeSeries.setData(volumeData);
+  updateIndicators();
+  applyVisibleCandleRange();
+  setStatus("실시간 연결");
+  openCandleSocket(interval);
+}
+
+function closeCandleSocket() {
+  if (candleSocket) {
+    candleSocket.close();
+    candleSocket = null;
+  }
+}
+
+function closeTickerSocket() {
+  if (tickerSocket) {
+    tickerSocket.close();
+    tickerSocket = null;
+  }
+}
+
+function upsertByTime(items, nextItem) {
+  const last = items.at(-1);
+  if (last && last.time === nextItem.time) {
+    items[items.length - 1] = nextItem;
+    return;
+  }
+  items.push(nextItem);
+  if (items.length > candleLimit) items.shift();
+}
+
+function openCandleSocket(interval) {
+  if (!isBinanceSymbol(symbol)) return;
+
+  const stream = `${symbol.toLowerCase()}@kline_${interval}`;
+  candleSocket = new WebSocket(`wss://stream.binance.com:9443/ws/${stream}`);
+
+  candleSocket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    const kline = message.k;
+    const open = Number(kline.o);
+    const close = Number(kline.c);
+    const time = Math.floor(kline.t / 1000);
+    const nextCandle = {
+      time,
+      open,
+      high: Number(kline.h),
+      low: Number(kline.l),
+      close,
+    };
+    const nextVolume = {
+      time,
+      value: Number(kline.v),
+      color: close >= open ? "rgba(34, 171, 148, 0.45)" : "rgba(247, 82, 95, 0.45)",
+    };
+
+    upsertByTime(candleData, nextCandle);
+    upsertByTime(volumeData, nextVolume);
+    candleSeries.update(nextCandle);
+    volumeSeries.update(nextVolume);
+    updateIndicators();
+    applyVisibleCandleRange();
+  };
+
+  candleSocket.onopen = () => setStatus("실시간 연결");
+  candleSocket.onerror = () => setStatus("연결 오류");
+  candleSocket.onclose = () => {
+    if (currentInterval === interval) {
+      setStatus("연결 종료");
+    }
+  };
+}
+
+function openTickerSocket() {
+  closeTickerSocket();
+  if (!isBinanceSymbol(symbol)) {
+    setStatus("USDT.D 차트 미지원");
+    return;
+  }
+
+  tickerSocket = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@ticker`);
+
+  tickerSocket.onmessage = (event) => {
+    const ticker = JSON.parse(event.data);
+    const change = Number(ticker.P);
+    const high = Number(ticker.h);
+    const low = Number(ticker.l);
+
+    els.lastPrice.textContent = formatPrice(ticker.c);
+    els.highPrice.textContent = formatPrice(high);
+    els.lowPrice.textContent = formatPrice(low);
+    els.highLowRange.textContent = formatHighLowRange(high, low);
+    els.volume.textContent = `${compactFormatter.format(Number(ticker.v))} ${symbolLabels[symbol].split("/")[0]}`;
+    els.priceChange.textContent = `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`;
+    els.priceChange.classList.toggle("up", change >= 0);
+    els.priceChange.classList.toggle("down", change < 0);
+  };
+}
+
+function bindControls() {
+  els.themeRadios.forEach((radio) => {
+    radio.addEventListener("change", () => {
+      if (!radio.checked) return;
+      document.body.dataset.theme = radio.value;
+      applyChartTheme();
+    });
+  });
+
+  els.symbolSelect.addEventListener("change", async () => {
+    symbol = els.symbolSelect.value;
+    resetMarketDisplay();
+    closeTickerSocket();
+
+    if (!isBinanceSymbol(symbol)) {
+      closeCandleSocket();
+      clearChartData();
+      setStatus("USDT.D 차트 미지원");
+      return;
+    }
+
+    openTickerSocket();
+
+    try {
+      await loadCandles(currentInterval);
+    } catch (error) {
+      setStatus("데이터 오류");
+      console.error(error);
+    }
+  });
+
+  els.candleCount.addEventListener("change", () => {
+    visibleCandleCount = clampVisibleCandleCount(els.candleCount.value);
+    els.candleCount.value = visibleCandleCount;
+    applyVisibleCandleRange();
+  });
+
+  els.candleCount.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      els.candleCount.blur();
+    }
+  });
+
+  els.buttons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      const interval = button.dataset.interval;
+      if (interval === currentInterval) return;
+
+      currentInterval = interval;
+      els.buttons.forEach((item) => item.classList.toggle("active", item === button));
+
+      try {
+        await loadCandles(currentInterval);
+      } catch (error) {
+        setStatus("데이터 오류");
+        console.error(error);
+      }
+    });
+  });
+}
+
+async function init() {
+  resetMarketDisplay();
+  createCharts();
+  bindControls();
+  openTickerSocket();
+
+  try {
+    await loadCandles(currentInterval);
+  } catch (error) {
+    setStatus("데이터 오류");
+    console.error(error);
+  }
+}
+
+window.addEventListener("beforeunload", () => {
+  closeCandleSocket();
+  closeTickerSocket();
+});
+
+init();
