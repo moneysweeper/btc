@@ -40,6 +40,7 @@ let crosshairSyncing = false;
 
 const els = {
   chart: document.querySelector("#chart"),
+  maTrendOverlay: document.querySelector("#maTrendOverlay"),
   rsiChart: document.querySelector("#rsiChart"),
   macdChart: document.querySelector("#macdChart"),
   lastPrice: document.querySelector("#lastPrice"),
@@ -90,12 +91,12 @@ const chartThemes = {
 };
 
 const maSettings = {
-  10: { color: "#f5a524", style: "solid", width: 3 },
-  20: { color: "#4ea1ff", style: "solid", width: 3 },
-  50: { color: "#a78bfa", style: "solid", width: 3 },
-  200: { color: "#e5e7eb", style: "solid", width: 1 },
+  10: { color: "#f7525f", style: "solid", width: 1 },
+  20: { color: "#ffb347", style: "solid", width: 1 },
+  50: { color: "#a78bfa", style: "solid", width: 2 },
+  200: { color: "#9ca3af", style: "solid", width: 1 },
 };
-const maSettingsStorageKey = "cryptoChartMaSettings";
+const maSettingsStorageKey = "cryptoChartMaSettings.v3";
 
 function setStatus(text) {
   els.status.textContent = text;
@@ -143,6 +144,7 @@ function clearChartData() {
   macdDownSeries.setData([]);
   macdSignalSeries.setData([]);
   macdHistogramSeries.setData([]);
+  drawMaTrendBackground();
 }
 
 function isBinanceSymbol(value) {
@@ -230,6 +232,87 @@ function applyMaSettings() {
     });
   });
   updateMaLegend();
+}
+
+function resizeMaTrendOverlay() {
+  if (!els.maTrendOverlay) return;
+  const ratio = window.devicePixelRatio || 1;
+  const width = els.chart.clientWidth;
+  const height = els.chart.clientHeight;
+
+  els.maTrendOverlay.style.width = `${width}px`;
+  els.maTrendOverlay.style.height = `${height}px`;
+  els.maTrendOverlay.width = Math.max(1, Math.floor(width * ratio));
+  els.maTrendOverlay.height = Math.max(1, Math.floor(height * ratio));
+}
+
+function drawMaTrendBackground() {
+  if (!els.maTrendOverlay) return;
+
+  resizeMaTrendOverlay();
+  const canvas = els.maTrendOverlay;
+  const ctx = canvas.getContext("2d");
+  const ratio = window.devicePixelRatio || 1;
+  const cssWidth = canvas.width / ratio;
+  const cssHeight = canvas.height / ratio;
+
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  if (!mainChart || !candleData.length) return;
+
+  const ma10 = calculateSma(candleData, 10);
+  const ma20 = new Map(calculateSma(candleData, 20).map((item) => [item.time, item.value]));
+  const ma50 = new Map(calculateSma(candleData, 50).map((item) => [item.time, item.value]));
+
+  let activeZone = null;
+
+  function flushZone(toTime) {
+    if (!activeZone) return;
+
+    const x1 = mainChart.timeScale().timeToCoordinate(activeZone.from);
+    const x2 = mainChart.timeScale().timeToCoordinate(toTime);
+    if (x1 != null && x2 != null) {
+      ctx.fillStyle = activeZone.type === "bullish" ? "rgba(255, 235, 59, 0.34)" : "rgba(255, 82, 82, 0.32)";
+      ctx.fillRect(Math.min(x1, x2), 0, Math.abs(x2 - x1) + 1, cssHeight);
+    }
+
+    activeZone = null;
+  }
+
+  for (let index = 1; index < ma10.length; index += 1) {
+    const prev = ma10[index - 1];
+    const curr = ma10[index];
+    const prev20 = ma20.get(prev.time);
+    const curr20 = ma20.get(curr.time);
+    const prev50 = ma50.get(prev.time);
+    const curr50 = ma50.get(curr.time);
+
+    if ([prev20, curr20, prev50, curr50].some((value) => value == null)) continue;
+
+    const bullish = prev.value > prev20 && prev20 > prev50 && curr.value > curr20 && curr20 > curr50;
+    const bearish = prev50 > prev20 && prev20 > prev.value && curr50 > curr20 && curr20 > curr.value;
+    const nextType = bullish ? "bullish" : bearish ? "bearish" : null;
+
+    if (!nextType) {
+      flushZone(prev.time);
+      continue;
+    }
+
+    if (!activeZone) {
+      activeZone = { type: nextType, from: prev.time };
+      continue;
+    }
+
+    if (activeZone.type !== nextType) {
+      flushZone(prev.time);
+      activeZone = { type: nextType, from: prev.time };
+    }
+  }
+
+  if (ma10.length) {
+    flushZone(ma10[ma10.length - 1].time);
+  }
 }
 
 function currentThemeName() {
@@ -437,6 +520,9 @@ function observeChartSize(container, chart) {
       width: container.clientWidth,
       height: container.clientHeight,
     });
+    if (chart === mainChart) {
+      drawMaTrendBackground();
+    }
   }).observe(container);
 }
 
@@ -459,6 +545,7 @@ function syncVisibleRanges(charts) {
         }
       });
       syncing = false;
+      drawMaTrendBackground();
     });
   });
 }
@@ -535,6 +622,7 @@ function applyVisibleCandleRange() {
   chartsReadyForSync = false;
   [mainChart, rsiChart, macdChart].forEach((item) => item.timeScale().setVisibleRange(visibleRange));
   chartsReadyForSync = true;
+  drawMaTrendBackground();
 }
 
 function toCandle(kline) {
@@ -727,6 +815,7 @@ function updateIndicators() {
   macdDownSeries.setData([]);
   macdSignalSeries.setData(macd.signal);
   macdHistogramSeries.setData(macd.histogram);
+  drawMaTrendBackground();
 }
 
 async function loadCandles(interval) {

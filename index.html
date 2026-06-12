@@ -64,34 +64,34 @@
             </div>
           </section>
 
-          <section class="setting-panel ma-settings" aria-label="이동평균선 설정">
-            <span class="setting-label">이동평균선</span>
+          <details class="setting-panel ma-settings" aria-label="이동평균선 설정">
+            <summary class="setting-label">이동평균선</summary>
             <div class="ma-setting-row">
               <span>MA 10</span>
-              <input type="color" data-ma-color="10" value="#f5a524" aria-label="MA 10 색상" />
+              <input type="color" data-ma-color="10" value="#f7525f" aria-label="MA 10 색상" />
               <select data-ma-style="10" aria-label="MA 10 선 종류">
                 <option value="solid">실선</option>
                 <option value="dashed">파선</option>
                 <option value="dotted">점선</option>
               </select>
               <select data-ma-width="10" aria-label="MA 10 선 굵기">
-                <option value="1">얇게</option>
+                <option value="1" selected>얇게</option>
                 <option value="2">보통</option>
-                <option value="3" selected>굵게</option>
+                <option value="3">굵게</option>
               </select>
             </div>
             <div class="ma-setting-row">
               <span>MA 20</span>
-              <input type="color" data-ma-color="20" value="#4ea1ff" aria-label="MA 20 색상" />
+              <input type="color" data-ma-color="20" value="#ffb347" aria-label="MA 20 색상" />
               <select data-ma-style="20" aria-label="MA 20 선 종류">
                 <option value="solid">실선</option>
                 <option value="dashed">파선</option>
                 <option value="dotted">점선</option>
               </select>
               <select data-ma-width="20" aria-label="MA 20 선 굵기">
-                <option value="1">얇게</option>
+                <option value="1" selected>얇게</option>
                 <option value="2">보통</option>
-                <option value="3" selected>굵게</option>
+                <option value="3">굵게</option>
               </select>
             </div>
             <div class="ma-setting-row">
@@ -104,13 +104,13 @@
               </select>
               <select data-ma-width="50" aria-label="MA 50 선 굵기">
                 <option value="1">얇게</option>
-                <option value="2">보통</option>
-                <option value="3" selected>굵게</option>
+                <option value="2" selected>보통</option>
+                <option value="3">굵게</option>
               </select>
             </div>
             <div class="ma-setting-row">
               <span>MA 200</span>
-              <input type="color" data-ma-color="200" value="#e5e7eb" aria-label="MA 200 색상" />
+              <input type="color" data-ma-color="200" value="#9ca3af" aria-label="MA 200 색상" />
               <select data-ma-style="200" aria-label="MA 200 선 종류">
                 <option value="solid">실선</option>
                 <option value="dashed">파선</option>
@@ -122,7 +122,7 @@
                 <option value="3">굵게</option>
               </select>
             </div>
-          </section>
+          </details>
         </header>
 
         <section class="stats" aria-label="현재 시장 정보">
@@ -159,6 +159,7 @@
           <span>RSI 14/Signal 9 · MACD 12/26/9</span>
         </div>
         <div class="main-chart-wrap">
+          <canvas id="maTrendOverlay" class="ma-trend-overlay" aria-hidden="true"></canvas>
           <div class="ma-legend" aria-label="이동평균선 범례">
             <span><i class="ma10"></i>MA 10</span>
             <span><i class="ma20"></i>MA 20</span>

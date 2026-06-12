@@ -258,6 +258,29 @@ h1 {
   gap: 9px;
 }
 
+.ma-settings summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  list-style: none;
+  cursor: pointer;
+}
+
+.ma-settings summary::-webkit-details-marker {
+  display: none;
+}
+
+.ma-settings summary::after {
+  content: "+";
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.ma-settings[open] summary::after {
+  content: "-";
+}
+
 .ma-setting-row {
   display: grid;
   grid-template-columns: 44px 34px minmax(0, 1fr) minmax(0, 1fr);
@@ -342,6 +365,15 @@ h1 {
   position: relative;
 }
 
+.ma-trend-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 .main-chart {
   height: min(58vh, 620px);
   min-height: 360px;
@@ -351,7 +383,7 @@ h1 {
   position: absolute;
   top: 10px;
   left: 12px;
-  z-index: 2;
+  z-index: 4;
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
@@ -374,11 +406,11 @@ h1 {
 }
 
 .ma-legend .ma10 {
-  background: #f5a524;
+  background: #f7525f;
 }
 
 .ma-legend .ma20 {
-  background: #4ea1ff;
+  background: #ffb347;
 }
 
 .ma-legend .ma50 {
@@ -387,11 +419,11 @@ h1 {
 
 .ma-legend .ma200 {
   height: 2px;
-  background: rgba(255, 255, 255, 0.72);
+  background: #9ca3af;
 }
 
 body[data-theme="light"] .ma-legend .ma200 {
-  background: rgba(17, 24, 39, 0.72);
+  background: #9ca3af;
 }
 
 .indicator-row {
