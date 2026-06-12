@@ -53,6 +53,8 @@ const els = {
   symbolSelect: document.querySelector("#symbolSelect"),
   candleCount: document.querySelector("#candleCount"),
   themeRadios: document.querySelectorAll('input[name="theme"]'),
+  maColorInputs: document.querySelectorAll("[data-ma-color]"),
+  maStyleSelects: document.querySelectorAll("[data-ma-style]"),
   buttons: document.querySelectorAll(".interval"),
 };
 
@@ -84,6 +86,13 @@ const chartThemes = {
     rsiMidline: "rgba(17, 24, 39, 0.72)",
     ma200: "rgba(17, 24, 39, 0.72)",
   },
+};
+
+const maSettings = {
+  10: { color: "#f5a524", style: "solid", width: 3 },
+  20: { color: "#4ea1ff", style: "solid", width: 3 },
+  50: { color: "#a78bfa", style: "solid", width: 3 },
+  200: { color: "#e5e7eb", style: "solid", width: 1 },
 };
 
 function setStatus(text) {
@@ -136,6 +145,52 @@ function clearChartData() {
 
 function isBinanceSymbol(value) {
   return value.endsWith("USDT");
+}
+
+function lineStyleValue(style) {
+  const styles = {
+    solid: LightweightCharts.LineStyle.Solid,
+    dashed: LightweightCharts.LineStyle.Dashed,
+    dotted: LightweightCharts.LineStyle.Dotted,
+  };
+  return styles[style] ?? LightweightCharts.LineStyle.Solid;
+}
+
+function maSeriesMap() {
+  return {
+    10: ma10Series,
+    20: ma20Series,
+    50: ma50Series,
+    200: ma200Series,
+  };
+}
+
+function updateMaLegend() {
+  Object.entries(maSettings).forEach(([period, setting]) => {
+    const swatch = document.querySelector(`.ma${period}`);
+    if (!swatch) return;
+    swatch.style.background = setting.color;
+    swatch.style.borderTop = setting.style === "dashed" ? `2px dashed ${setting.color}` : "";
+    swatch.style.backgroundImage = setting.style === "dotted"
+      ? `radial-gradient(circle, ${setting.color} 45%, transparent 47%)`
+      : "";
+    swatch.style.backgroundSize = setting.style === "dotted" ? "6px 3px" : "";
+    swatch.style.backgroundColor = setting.style === "dotted" ? "transparent" : setting.color;
+  });
+}
+
+function applyMaSettings() {
+  const seriesByPeriod = maSeriesMap();
+  Object.entries(maSettings).forEach(([period, setting]) => {
+    const series = seriesByPeriod[period];
+    if (!series) return;
+    series.applyOptions({
+      color: setting.color,
+      lineStyle: lineStyleValue(setting.style),
+      lineWidth: setting.width,
+    });
+  });
+  updateMaLegend();
 }
 
 function currentThemeName() {
@@ -202,26 +257,30 @@ function createCharts() {
   });
 
   ma10Series = mainChart.addLineSeries({
-    color: "#f5a524",
-    lineWidth: 3,
+    color: maSettings[10].color,
+    lineStyle: lineStyleValue(maSettings[10].style),
+    lineWidth: maSettings[10].width,
     priceLineVisible: false,
     priceFormat: { type: "price", precision: 2, minMove: 0.01 },
   });
   ma20Series = mainChart.addLineSeries({
-    color: "#4ea1ff",
-    lineWidth: 3,
+    color: maSettings[20].color,
+    lineStyle: lineStyleValue(maSettings[20].style),
+    lineWidth: maSettings[20].width,
     priceLineVisible: false,
     priceFormat: { type: "price", precision: 2, minMove: 0.01 },
   });
   ma50Series = mainChart.addLineSeries({
-    color: "#a78bfa",
-    lineWidth: 3,
+    color: maSettings[50].color,
+    lineStyle: lineStyleValue(maSettings[50].style),
+    lineWidth: maSettings[50].width,
     priceLineVisible: false,
     priceFormat: { type: "price", precision: 2, minMove: 0.01 },
   });
   ma200Series = mainChart.addLineSeries({
-    color: "rgba(255, 255, 255, 0.72)",
-    lineWidth: 1,
+    color: maSettings[200].color,
+    lineStyle: lineStyleValue(maSettings[200].style),
+    lineWidth: maSettings[200].width,
     priceLineVisible: false,
     priceFormat: { type: "price", precision: 2, minMove: 0.01 },
   });
@@ -301,6 +360,7 @@ function createCharts() {
   observeChartSize(els.chart, mainChart);
   observeChartSize(els.rsiChart, rsiChart);
   observeChartSize(els.macdChart, macdChart);
+  applyMaSettings();
 }
 
 function applyChartTheme() {
@@ -329,7 +389,7 @@ function applyChartTheme() {
 
   [mainChart, rsiChart, macdChart].forEach((chart) => chart.applyOptions(options));
   rsiMidlineSeries.applyOptions({ color: theme.rsiMidline });
-  ma200Series.applyOptions({ color: theme.ma200 });
+  applyMaSettings();
 }
 
 function observeChartSize(container, chart) {
@@ -753,6 +813,22 @@ function openTickerSocket() {
 }
 
 function bindControls() {
+  els.maColorInputs.forEach((input) => {
+    input.addEventListener("input", () => {
+      const period = input.dataset.maColor;
+      maSettings[period].color = input.value;
+      applyMaSettings();
+    });
+  });
+
+  els.maStyleSelects.forEach((select) => {
+    select.addEventListener("change", () => {
+      const period = select.dataset.maStyle;
+      maSettings[period].style = select.value;
+      applyMaSettings();
+    });
+  });
+
   els.themeRadios.forEach((radio) => {
     radio.addEventListener("change", () => {
       if (!radio.checked) return;
