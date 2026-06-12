@@ -55,6 +55,7 @@ const els = {
   themeRadios: document.querySelectorAll('input[name="theme"]'),
   maColorInputs: document.querySelectorAll("[data-ma-color]"),
   maStyleSelects: document.querySelectorAll("[data-ma-style]"),
+  maWidthSelects: document.querySelectorAll("[data-ma-width]"),
   buttons: document.querySelectorAll(".interval"),
 };
 
@@ -825,6 +826,14 @@ function bindControls() {
     select.addEventListener("change", () => {
       const period = select.dataset.maStyle;
       maSettings[period].style = select.value;
+      applyMaSettings();
+    });
+  });
+
+  els.maWidthSelects.forEach((select) => {
+    select.addEventListener("change", () => {
+      const period = select.dataset.maWidth;
+      maSettings[period].width = Number(select.value);
       applyMaSettings();
     });
   });

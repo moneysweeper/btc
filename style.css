@@ -260,7 +260,7 @@ h1 {
 
 .ma-setting-row {
   display: grid;
-  grid-template-columns: 44px 34px minmax(0, 1fr);
+  grid-template-columns: 44px 34px minmax(0, 1fr) minmax(0, 1fr);
   align-items: center;
   gap: 7px;
 }
@@ -274,7 +274,7 @@ h1 {
 .ma-setting-row select {
   height: 28px;
   padding: 0 6px;
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .stats {
