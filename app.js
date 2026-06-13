@@ -8,6 +8,11 @@ const symbolLabels = {
 let symbol = "BTCUSDT";
 const candleLimit = 500;
 const defaultVisibleCandleCount = 100;
+const fractalPeriod = 2;
+const orderBlockSwingLength = 10;
+const orderBlockMaxAtrMultiplier = 3.5;
+const maxStoredOrderBlocks = 30;
+const visibleOrderBlocksPerSide = 3;
 let currentInterval = "1m";
 let visibleCandleCount = defaultVisibleCandleCount;
 let candleSocket = null;
@@ -35,12 +40,15 @@ let candleData = [];
 let volumeData = [];
 let rsiData = [];
 let macdLineData = [];
+let fractalsEnabled = true;
+let orderBlockEnabled = true;
 let chartsReadyForSync = false;
 let crosshairSyncing = false;
 
 const els = {
   chart: document.querySelector("#chart"),
   maTrendOverlay: document.querySelector("#maTrendOverlay"),
+  orderBlockOverlay: document.querySelector("#orderBlockOverlay"),
   rsiChart: document.querySelector("#rsiChart"),
   macdChart: document.querySelector("#macdChart"),
   lastPrice: document.querySelector("#lastPrice"),
@@ -54,6 +62,8 @@ const els = {
   symbolSelect: document.querySelector("#symbolSelect"),
   candleCount: document.querySelector("#candleCount"),
   themeRadios: document.querySelectorAll('input[name="theme"]'),
+  fractalRadios: document.querySelectorAll('input[name="fractals"]'),
+  orderBlockRadios: document.querySelectorAll('input[name="orderBlock"]'),
   maColorInputs: document.querySelectorAll("[data-ma-color]"),
   maStyleSelects: document.querySelectorAll("[data-ma-style]"),
   maWidthSelects: document.querySelectorAll("[data-ma-width]"),
@@ -112,6 +122,10 @@ function formatHighLowRange(high, low) {
   return `${formatPrice(range)} (${percent.toFixed(2)}%)`;
 }
 
+function formatCompact(value) {
+  return compactFormatter.format(Number(value || 0));
+}
+
 function resetMarketDisplay() {
   els.marketSymbol.textContent = symbolLabels[symbol] || symbol;
   els.lastPrice.textContent = "--";
@@ -144,7 +158,8 @@ function clearChartData() {
   macdDownSeries.setData([]);
   macdSignalSeries.setData([]);
   macdHistogramSeries.setData([]);
-  drawMaTrendBackground();
+  candleSeries.setMarkers([]);
+  drawMainOverlays();
 }
 
 function isBinanceSymbol(value) {
@@ -234,27 +249,36 @@ function applyMaSettings() {
   updateMaLegend();
 }
 
-function resizeMaTrendOverlay() {
-  if (!els.maTrendOverlay) return;
+function resizeChartOverlay(canvas) {
+  if (!canvas) return null;
   const ratio = window.devicePixelRatio || 1;
   const width = els.chart.clientWidth;
   const height = els.chart.clientHeight;
 
-  els.maTrendOverlay.style.width = `${width}px`;
-  els.maTrendOverlay.style.height = `${height}px`;
-  els.maTrendOverlay.width = Math.max(1, Math.floor(width * ratio));
-  els.maTrendOverlay.height = Math.max(1, Math.floor(height * ratio));
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  canvas.width = Math.max(1, Math.floor(width * ratio));
+  canvas.height = Math.max(1, Math.floor(height * ratio));
+
+  return {
+    ratio,
+    cssWidth: canvas.width / ratio,
+    cssHeight: canvas.height / ratio,
+  };
+}
+
+function resizeMaTrendOverlay() {
+  return resizeChartOverlay(els.maTrendOverlay);
 }
 
 function drawMaTrendBackground() {
   if (!els.maTrendOverlay) return;
 
-  resizeMaTrendOverlay();
+  const size = resizeMaTrendOverlay();
+  if (!size) return;
   const canvas = els.maTrendOverlay;
   const ctx = canvas.getContext("2d");
-  const ratio = window.devicePixelRatio || 1;
-  const cssWidth = canvas.width / ratio;
-  const cssHeight = canvas.height / ratio;
+  const { ratio, cssWidth, cssHeight } = size;
 
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, cssWidth, cssHeight);
@@ -315,6 +339,241 @@ function drawMaTrendBackground() {
   }
 }
 
+function calculateAtrByIndex(candles, period = 10) {
+  const atr = Array(candles.length).fill(null);
+  if (candles.length <= period) return atr;
+
+  const trueRanges = candles.map((candle, index) => {
+    if (index === 0) return candle.high - candle.low;
+    const previousClose = candles[index - 1].close;
+    return Math.max(
+      candle.high - candle.low,
+      Math.abs(candle.high - previousClose),
+      Math.abs(candle.low - previousClose),
+    );
+  });
+
+  let sum = 0;
+  trueRanges.forEach((value, index) => {
+    sum += value;
+    if (index >= period) sum -= trueRanges[index - period];
+    if (index >= period - 1) atr[index] = sum / period;
+  });
+
+  return atr;
+}
+
+function calculateOrderBlocks(candles) {
+  if (candles.length < orderBlockSwingLength + 3) return [];
+
+  const atr = calculateAtrByIndex(candles, 10);
+  const bullishBlocks = [];
+  const bearishBlocks = [];
+  let swingType = 0;
+  let topSwing = null;
+  let bottomSwing = null;
+
+  function addBlock(list, block) {
+    const blockSize = Math.abs(block.top - block.bottom);
+    const blockAtr = atr[block.createdIndex];
+    if (blockAtr == null || blockSize > blockAtr * orderBlockMaxAtrMultiplier) return;
+
+    list.unshift(block);
+    if (list.length > maxStoredOrderBlocks) list.pop();
+  }
+
+  for (let index = orderBlockSwingLength; index < candles.length; index += 1) {
+    const candle = candles[index];
+    const candidateIndex = index - orderBlockSwingLength;
+    const window = candles.slice(Math.max(0, index - orderBlockSwingLength + 1), index + 1);
+    const upper = Math.max(...window.map((item) => item.high));
+    const lower = Math.min(...window.map((item) => item.low));
+    const previousSwingType = swingType;
+
+    if (candles[candidateIndex].high > upper) {
+      swingType = 0;
+    } else if (candles[candidateIndex].low < lower) {
+      swingType = 1;
+    }
+
+    if (swingType === 0 && previousSwingType !== 0) {
+      topSwing = {
+        x: candidateIndex,
+        y: candles[candidateIndex].high,
+        crossed: false,
+      };
+    }
+
+    if (swingType === 1 && previousSwingType !== 1) {
+      bottomSwing = {
+        x: candidateIndex,
+        y: candles[candidateIndex].low,
+        crossed: false,
+      };
+    }
+
+    for (let listIndex = bullishBlocks.length - 1; listIndex >= 0; listIndex -= 1) {
+      const currentBlock = bullishBlocks[listIndex];
+      if (!currentBlock.breaker) {
+        if (candle.low < currentBlock.bottom) {
+          currentBlock.breaker = true;
+          currentBlock.breakTime = candle.time;
+        }
+      } else if (candle.high > currentBlock.top) {
+        bullishBlocks.splice(listIndex, 1);
+      }
+    }
+
+    for (let listIndex = bearishBlocks.length - 1; listIndex >= 0; listIndex -= 1) {
+      const currentBlock = bearishBlocks[listIndex];
+      if (!currentBlock.breaker) {
+        if (candle.high > currentBlock.top) {
+          currentBlock.breaker = true;
+          currentBlock.breakTime = candle.time;
+        }
+      } else if (candle.low < currentBlock.bottom) {
+        bearishBlocks.splice(listIndex, 1);
+      }
+    }
+
+    if (topSwing && !topSwing.crossed && candle.close > topSwing.y) {
+      topSwing.crossed = true;
+
+      let boxBottom = candles[index - 1].high;
+      let boxTop = candles[index - 1].low;
+      let boxIndex = index - 1;
+
+      for (let cursor = index - 1; cursor > topSwing.x; cursor -= 1) {
+        if (candles[cursor].low < boxBottom) {
+          boxBottom = candles[cursor].low;
+          boxTop = candles[cursor].high;
+          boxIndex = cursor;
+        }
+      }
+
+      addBlock(bullishBlocks, {
+        type: "Bull",
+        top: boxTop,
+        bottom: boxBottom,
+        startTime: candles[boxIndex].time,
+        volume: candle.volume + (candles[index - 1]?.volume || 0) + (candles[index - 2]?.volume || 0),
+        highVolume: candle.volume + (candles[index - 1]?.volume || 0),
+        lowVolume: candles[index - 2]?.volume || 0,
+        breaker: false,
+        breakTime: null,
+        createdIndex: index,
+      });
+    }
+
+    if (bottomSwing && !bottomSwing.crossed && candle.close < bottomSwing.y) {
+      bottomSwing.crossed = true;
+
+      let boxBottom = candles[index - 1].low;
+      let boxTop = candles[index - 1].high;
+      let boxIndex = index - 1;
+
+      for (let cursor = index - 1; cursor > bottomSwing.x; cursor -= 1) {
+        if (candles[cursor].high > boxTop) {
+          boxTop = candles[cursor].high;
+          boxBottom = candles[cursor].low;
+          boxIndex = cursor;
+        }
+      }
+
+      addBlock(bearishBlocks, {
+        type: "Bear",
+        top: boxTop,
+        bottom: boxBottom,
+        startTime: candles[boxIndex].time,
+        volume: candle.volume + (candles[index - 1]?.volume || 0) + (candles[index - 2]?.volume || 0),
+        highVolume: candles[index - 2]?.volume || 0,
+        lowVolume: candle.volume + (candles[index - 1]?.volume || 0),
+        breaker: false,
+        breakTime: null,
+        createdIndex: index,
+      });
+    }
+  }
+
+  return [
+    ...bullishBlocks.slice(0, visibleOrderBlocksPerSide),
+    ...bearishBlocks.slice(0, visibleOrderBlocksPerSide),
+  ].sort((first, second) => first.startTime - second.startTime);
+}
+
+function drawOrderBlockOverlay() {
+  if (!els.orderBlockOverlay) return;
+
+  const size = resizeChartOverlay(els.orderBlockOverlay);
+  if (!size) return;
+
+  const canvas = els.orderBlockOverlay;
+  const ctx = canvas.getContext("2d");
+  const { ratio, cssWidth, cssHeight } = size;
+
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  if (!orderBlockEnabled || !mainChart || !candleSeries || !candleData.length) return;
+
+  const latestTime = candleData.at(-1).time;
+  const intervalSeconds = candleData.length > 1 ? Math.max(1, candleData.at(-1).time - candleData.at(-2).time) : 60;
+  const blocks = calculateOrderBlocks(candleData);
+  const textColor = currentThemeName() === "light" ? "rgba(17, 24, 39, 0.72)" : "rgba(255, 255, 255, 0.76)";
+
+  blocks.forEach((block) => {
+    const startX = mainChart.timeScale().timeToCoordinate(block.startTime);
+    const endTime = block.breakTime || latestTime + intervalSeconds;
+    const endX = mainChart.timeScale().timeToCoordinate(endTime);
+    const topY = candleSeries.priceToCoordinate(block.top);
+    const bottomY = candleSeries.priceToCoordinate(block.bottom);
+
+    if ([startX, endX, topY, bottomY].some((value) => value == null)) return;
+
+    const x = Math.min(startX, endX);
+    const y = Math.min(topY, bottomY);
+    const width = Math.max(16, Math.abs(endX - startX));
+    const height = Math.max(10, Math.abs(bottomY - topY));
+    const isBull = block.type === "Bull";
+    const fill = isBull ? "rgba(8, 153, 129, 0.28)" : "rgba(242, 54, 70, 0.28)";
+    const stroke = isBull ? "rgba(8, 153, 129, 0.72)" : "rgba(242, 54, 70, 0.72)";
+    const barWidth = Math.min(width * 0.34, 74);
+    const highRatio = block.volume > 0 ? block.highVolume / block.volume : 0.5;
+    const lowRatio = block.volume > 0 ? block.lowVolume / block.volume : 0.5;
+
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, y, width, height);
+    ctx.strokeRect(x + 0.5, y + 0.5, width, height);
+
+    ctx.fillStyle = "rgba(8, 153, 129, 0.34)";
+    ctx.fillRect(x, y, Math.max(4, barWidth * highRatio), height / 2);
+    ctx.fillStyle = "rgba(242, 54, 70, 0.34)";
+    ctx.fillRect(x, y + height / 2, Math.max(4, barWidth * lowRatio), height / 2);
+
+    ctx.strokeStyle = textColor;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, y + height / 2);
+    ctx.lineTo(x + barWidth, y + height / 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (height >= 18 && width >= 64) {
+      ctx.fillStyle = textColor;
+      ctx.font = "700 11px Inter, Arial, sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`${formatCompact(block.volume)} Order Block`, x + barWidth + 8, y + height / 2);
+    }
+  });
+}
+
+function drawMainOverlays() {
+  drawMaTrendBackground();
+  drawOrderBlockOverlay();
+}
+
 function currentThemeName() {
   return document.body.dataset.theme === "light" ? "light" : "dark";
 }
@@ -351,10 +610,24 @@ function chartOptions(container) {
   };
 }
 
+function applyIndicatorTimeAxisVisibility() {
+  [rsiChart, macdChart].forEach((chart) => {
+    if (!chart) return;
+    chart.applyOptions({
+      timeScale: {
+        visible: false,
+        timeVisible: false,
+        secondsVisible: false,
+      },
+    });
+  });
+}
+
 function createCharts() {
   mainChart = LightweightCharts.createChart(els.chart, chartOptions(els.chart));
   rsiChart = LightweightCharts.createChart(els.rsiChart, chartOptions(els.rsiChart));
   macdChart = LightweightCharts.createChart(els.macdChart, chartOptions(els.macdChart));
+  applyIndicatorTimeAxisVisibility();
 
   candleSeries = mainChart.addCandlestickSeries({
     upColor: "#22ab94",
@@ -510,8 +783,10 @@ function applyChartTheme() {
   };
 
   [mainChart, rsiChart, macdChart].forEach((chart) => chart.applyOptions(options));
+  applyIndicatorTimeAxisVisibility();
   rsiMidlineSeries.applyOptions({ color: theme.rsiMidline });
   applyMaSettings();
+  drawMainOverlays();
 }
 
 function observeChartSize(container, chart) {
@@ -521,7 +796,7 @@ function observeChartSize(container, chart) {
       height: container.clientHeight,
     });
     if (chart === mainChart) {
-      drawMaTrendBackground();
+      drawMainOverlays();
     }
   }).observe(container);
 }
@@ -545,7 +820,7 @@ function syncVisibleRanges(charts) {
         }
       });
       syncing = false;
-      drawMaTrendBackground();
+      drawMainOverlays();
     });
   });
 }
@@ -622,7 +897,7 @@ function applyVisibleCandleRange() {
   chartsReadyForSync = false;
   [mainChart, rsiChart, macdChart].forEach((item) => item.timeScale().setVisibleRange(visibleRange));
   chartsReadyForSync = true;
-  drawMaTrendBackground();
+  drawMainOverlays();
 }
 
 function toCandle(kline) {
@@ -632,6 +907,7 @@ function toCandle(kline) {
     high: Number(kline[2]),
     low: Number(kline[3]),
     close: Number(kline[4]),
+    volume: Number(kline[5]),
   };
 }
 
@@ -792,6 +1068,71 @@ function calculateMacd(candles, fastPeriod = 12, slowPeriod = 26, signalPeriod =
   return { macdLine, signal, histogram };
 }
 
+function calculateWilliamsFractalMarkers(candles, n = fractalPeriod) {
+  const markers = [];
+  if (candles.length < n * 2 + 5) return markers;
+
+  for (let center = n + 4; center < candles.length - n; center += 1) {
+    const centerHigh = candles[center].high;
+    const centerLow = candles[center].low;
+    let upflagDownFrontier = true;
+    let upflagUpFrontier0 = true;
+    let upflagUpFrontier1 = true;
+    let upflagUpFrontier2 = true;
+    let upflagUpFrontier3 = true;
+    let upflagUpFrontier4 = true;
+    let downflagDownFrontier = true;
+    let downflagUpFrontier0 = true;
+    let downflagUpFrontier1 = true;
+    let downflagUpFrontier2 = true;
+    let downflagUpFrontier3 = true;
+    let downflagUpFrontier4 = true;
+
+    for (let i = 1; i <= n; i += 1) {
+      upflagDownFrontier = upflagDownFrontier && candles[center + i].high < centerHigh;
+      upflagUpFrontier0 = upflagUpFrontier0 && candles[center - i].high < centerHigh;
+      upflagUpFrontier1 = upflagUpFrontier1 && candles[center - 1].high <= centerHigh && candles[center - i - 1].high < centerHigh;
+      upflagUpFrontier2 = upflagUpFrontier2 && candles[center - 1].high <= centerHigh && candles[center - 2].high <= centerHigh && candles[center - i - 2].high < centerHigh;
+      upflagUpFrontier3 = upflagUpFrontier3 && candles[center - 1].high <= centerHigh && candles[center - 2].high <= centerHigh && candles[center - 3].high <= centerHigh && candles[center - i - 3].high < centerHigh;
+      upflagUpFrontier4 = upflagUpFrontier4 && candles[center - 1].high <= centerHigh && candles[center - 2].high <= centerHigh && candles[center - 3].high <= centerHigh && candles[center - 4].high <= centerHigh && candles[center - i - 4].high < centerHigh;
+
+      downflagDownFrontier = downflagDownFrontier && candles[center + i].low > centerLow;
+      downflagUpFrontier0 = downflagUpFrontier0 && candles[center - i].low > centerLow;
+      downflagUpFrontier1 = downflagUpFrontier1 && candles[center - 1].low >= centerLow && candles[center - i - 1].low > centerLow;
+      downflagUpFrontier2 = downflagUpFrontier2 && candles[center - 1].low >= centerLow && candles[center - 2].low >= centerLow && candles[center - i - 2].low > centerLow;
+      downflagUpFrontier3 = downflagUpFrontier3 && candles[center - 1].low >= centerLow && candles[center - 2].low >= centerLow && candles[center - 3].low >= centerLow && candles[center - i - 3].low > centerLow;
+      downflagUpFrontier4 = downflagUpFrontier4 && candles[center - 1].low >= centerLow && candles[center - 2].low >= centerLow && candles[center - 3].low >= centerLow && candles[center - 4].low >= centerLow && candles[center - i - 4].low > centerLow;
+    }
+
+    if (upflagDownFrontier && (upflagUpFrontier0 || upflagUpFrontier1 || upflagUpFrontier2 || upflagUpFrontier3 || upflagUpFrontier4)) {
+      markers.push({
+        time: candles[center].time,
+        position: "aboveBar",
+        color: "#009688",
+        shape: "arrowDown",
+        size: 1,
+      });
+    }
+
+    if (downflagDownFrontier && (downflagUpFrontier0 || downflagUpFrontier1 || downflagUpFrontier2 || downflagUpFrontier3 || downflagUpFrontier4)) {
+      markers.push({
+        time: candles[center].time,
+        position: "belowBar",
+        color: "#F44336",
+        shape: "arrowUp",
+        size: 1,
+      });
+    }
+  }
+
+  return markers.sort((first, second) => first.time - second.time);
+}
+
+function updateFractalMarkers() {
+  if (!candleSeries) return;
+  candleSeries.setMarkers(fractalsEnabled ? calculateWilliamsFractalMarkers(candleData) : []);
+}
+
 function updateIndicators() {
   const rsi = calculateRsi(candleData);
   const macd = calculateMacd(candleData);
@@ -815,7 +1156,8 @@ function updateIndicators() {
   macdDownSeries.setData([]);
   macdSignalSeries.setData(macd.signal);
   macdHistogramSeries.setData(macd.histogram);
-  drawMaTrendBackground();
+  updateFractalMarkers();
+  drawMainOverlays();
 }
 
 async function loadCandles(interval) {
@@ -890,6 +1232,7 @@ function openCandleSocket(interval) {
       high: Number(kline.h),
       low: Number(kline.l),
       close,
+      volume: Number(kline.v),
     };
     const nextVolume = {
       time,
@@ -973,6 +1316,22 @@ function bindControls() {
       if (!radio.checked) return;
       document.body.dataset.theme = radio.value;
       applyChartTheme();
+    });
+  });
+
+  els.fractalRadios.forEach((radio) => {
+    radio.addEventListener("change", () => {
+      if (!radio.checked) return;
+      fractalsEnabled = radio.value === "on";
+      updateFractalMarkers();
+    });
+  });
+
+  els.orderBlockRadios.forEach((radio) => {
+    radio.addEventListener("change", () => {
+      if (!radio.checked) return;
+      orderBlockEnabled = radio.value === "on";
+      drawOrderBlockOverlay();
     });
   });
 

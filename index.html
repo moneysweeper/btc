@@ -47,6 +47,34 @@
             </div>
           </section>
 
+          <section class="setting-panel" aria-label="Williams Fractals 적용">
+            <span class="setting-label">Williams Fractals</span>
+            <div class="radio-group">
+              <label>
+                <input type="radio" name="fractals" value="on" checked />
+                <span>적용</span>
+              </label>
+              <label>
+                <input type="radio" name="fractals" value="off" />
+                <span>미적용</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="setting-panel" aria-label="Order Block 적용">
+            <span class="setting-label">Order Block</span>
+            <div class="radio-group">
+              <label>
+                <input type="radio" name="orderBlock" value="on" checked />
+                <span>적용</span>
+              </label>
+              <label>
+                <input type="radio" name="orderBlock" value="off" />
+                <span>미적용</span>
+              </label>
+            </div>
+          </section>
+
           <nav class="controls" aria-label="차트 시간 선택">
             <button class="interval active" data-interval="1m">1분</button>
             <button class="interval" data-interval="5m">5분</button>
@@ -160,6 +188,7 @@
         </div>
         <div class="main-chart-wrap">
           <canvas id="maTrendOverlay" class="ma-trend-overlay" aria-hidden="true"></canvas>
+          <canvas id="orderBlockOverlay" class="order-block-overlay" aria-hidden="true"></canvas>
           <div class="ma-legend" aria-label="이동평균선 범례">
             <span><i class="ma10"></i>MA 10</span>
             <span><i class="ma20"></i>MA 20</span>
